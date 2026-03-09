@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.sensorviewer.SensorReadingTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-03-09T06:13:12" hostname="nachi-PP-Z690" time="0.003">
+  <properties/>
+  <testcase name="accuracy が異なる SensorReading は等しくない" classname="com.example.sensorviewer.SensorReadingTest" time="0.001"/>
+  <testcase name="values が異なる SensorReading は等しくない" classname="com.example.sensorviewer.SensorReadingTest" time="0.0"/>
+  <testcase name="accuracyLabel が accuracy 定数を正しい文字列に変換する" classname="com.example.sensorviewer.SensorReadingTest" time="0.001"/>
+  <testcase name="timestampNanos が異なる SensorReading は等しくない" classname="com.example.sensorviewer.SensorReadingTest" time="0.0"/>
+  <testcase name="同じ値を持つ SensorReading は等しい" classname="com.example.sensorviewer.SensorReadingTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
