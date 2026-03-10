@@ -2,56 +2,76 @@ package com.example.sensorviewer.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.sensorviewer.model.AttitudeReading
+import com.example.sensorviewer.model.UiAttitudeState
 import com.example.sensorviewer.model.UiSensorState
+import com.example.sensorviewer.usecase.ObserveAttitudeUseCase
 import com.example.sensorviewer.usecase.ObserveSensorsUseCase
+import com.example.sensorviewer.usecase.computeRelativeAttitude
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
 /**
  * センサーダッシュボード画面の ViewModel。
  *
- * [ObserveSensorsUseCase] が返す `Flow<List<UiSensorState>>` を
- * Composable が直接購読できる [StateFlow]<[SensorDashboardUiState]> に変換して公開する。
- *
- * ## 画面回転への対応
- * [SharingStarted.WhileSubscribed] に 5 秒の猶予を設けることで、
- * 画面回転によって Composable が一時的に破棄されても上流 Flow（センサーリスナー）を
- * 保持し続け、再生成時の再登録コストを回避する。
- *
- * ## エラーハンドリング
- * エラーは [toUiState] の `catch` で捕捉し [SensorDashboardUiState.Error] に変換する。
- * エラー後は Flow が終了するため、UiState は Error のまま固定される。
+ * [ObserveSensorsUseCase]・[ObserveAttitudeUseCase]・基準姿勢の 3 本を `combine` で合流させ、
+ * Composable が購読できる [StateFlow]<[SensorDashboardUiState]> として公開する。
  */
 @HiltViewModel
 class SensorViewModel @Inject constructor(
     observeSensors: ObserveSensorsUseCase,
+    observeAttitude: ObserveAttitudeUseCase,
 ) : ViewModel() {
 
-    val uiState: StateFlow<SensorDashboardUiState> = observeSensors()
-        .toUiState()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
-            initialValue = SensorDashboardUiState.Loading,
-        )
+    /** ユーザーが登録した基準姿勢。null = ENU 世界座標系をそのまま使用 */
+    private val _reference = MutableStateFlow<AttitudeReading?>(null)
+
+    val uiState: StateFlow<SensorDashboardUiState> =
+        combine(observeSensors(), observeAttitude(), _reference, ::buildSuccessState)
+            .catch { cause ->
+                emit(SensorDashboardUiState.Error(cause.message ?: "Unknown error"))
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
+                initialValue = SensorDashboardUiState.Loading,
+            )
+
+    /** 現在の世界座標系姿勢を基準として登録する */
+    fun setReference() {
+        _reference.value = (uiState.value as? SensorDashboardUiState.Success)
+            ?.worldAttitude?.reading
+    }
+
+    /** 基準をクリアし世界座標系表示に戻す */
+    fun clearReference() {
+        _reference.value = null
+    }
 }
 
-// ── プライベートユーティリティ ────────────────────────────────────────────────
+private fun buildSuccessState(
+    sensors: List<UiSensorState>,
+    rawAttitude: UiAttitudeState,
+    reference: AttitudeReading?,
+): SensorDashboardUiState = SensorDashboardUiState.Success(
+    sensors = sensors,
+    worldAttitude = rawAttitude,
+    relativeAttitude = buildRelativeAttitude(rawAttitude, reference),
+)
 
-/**
- * `Flow<List<UiSensorState>>` を `Flow<SensorDashboardUiState>` にマッピングする拡張関数。
- *
- * - 正常値 → [SensorDashboardUiState.Success]
- * - 上流例外 → [SensorDashboardUiState.Error]（`catch` で捕捉し message を取り出す）
- *
- * ViewModel 本体のコードを薄く保つためにここに切り出している。
- */
-private fun Flow<List<UiSensorState>>.toUiState(): Flow<SensorDashboardUiState> =
-    map<List<UiSensorState>, SensorDashboardUiState> { SensorDashboardUiState.Success(it) }
-        .catch { cause -> emit(SensorDashboardUiState.Error(cause.message ?: "Unknown error")) }
+private fun buildRelativeAttitude(
+    raw: UiAttitudeState,
+    reference: AttitudeReading?,
+): UiAttitudeState? {
+    if (reference == null || raw.reading == null) return null
+    return UiAttitudeState(
+        available = raw.available,
+        reading = computeRelativeAttitude(raw.reading, reference),
+    )
+}

@@ -9,8 +9,8 @@
 
 | 層 | テスト種別 | 実行環境 | テスト数 |
 |---|---|---|---|
-| ロジック層 | JVM unit test | JVM（Android 不要）| 27 |
-| UI 層 | Compose instrumented test | 実機 / エミュレータ | 4 |
+| ロジック層 | JVM unit test | JVM（Android 不要）| 58 |
+| UI 層 | Compose instrumented test | 実機 / エミュレータ | 7 |
 
 実機センサーを使った E2E テストは本プロジェクトのスコープ外（センサー値が非決定的なため）。
 
@@ -18,33 +18,7 @@
 
 ## ロジック層のテスト（JVM unit test）
 
-### `SensorViewModelTest`（6 テスト）
-
-ViewModel の状態遷移を検証する。`FakeObserveSensorsUseCase` で UseCase をスタブし、
-emit タイミングと `SensorDashboardUiState` の変化が一致することを Turbine で確認する。
-
-| テストケース | 検証内容 |
-|---|---|
-| 初期状態は Loading | StateFlow の initialValue |
-| Success に遷移する | 正常 emit → Success |
-| 連続 emit で最新値に更新される | 2 回目の emit で Success が差し替わる |
-| Error に遷移する | 例外 emit → Error |
-| エラーメッセージが正確に伝播する | exception.message == Error.message |
-| null メッセージは \"Unknown error\" | message=null 時のフォールバック |
-
-`MainDispatcherRule` で `Dispatchers.Main` を `StandardTestDispatcher` に置換することで
-JVM 上で ViewModel を動かせる。
-
-> **補足 — なぜ `MainDispatcherRule` が必要か**
-> ViewModel の内部処理は `Dispatchers.Main`（Android のメインスレッド用のディスパッチャ）を使う。
-> JVM 単体のテスト環境には Android のメインスレッドが存在しないため、
-> そのまま動かすとクラッシュする。`MainDispatcherRule` は `Dispatchers.Main` を
-> テスト用の偽ディスパッチャ（`StandardTestDispatcher`）に差し替えることで解決する。
->
-> JUnit4 の `@get:Rule` は「テストの前後に処理を挟む」仕組み。
-> `MainDispatcherRule` は「テスト開始前に差し替え、テスト終了後に元に戻す」を自動で行う。
-
-### `ObserveSensorsUseCaseTest`（8 テスト）
+### `ObserveSensorsUseCaseTest`（9 テスト）
 
 UseCase のマッピング・合流ロジックを検証する。`FakeSensorDataSource` で DataSource をスタブする。
 
@@ -58,6 +32,7 @@ UseCase のマッピング・合流ロジックを検証する。`FakeSensorData
 | 値更新で新しい emit が来る | 2 回目の読み取りが伝播する |
 | accuracy / timestampNanos が伝播する | データの欠損チェック |
 | 複数センサーが正しくマッピングされる | 3 センサー同時のマッピング確認 |
+| 一方のセンサーが更新されると他センサーの最新値も emit に含まれる | `combine` が全センサーの最新値を保持する |
 
 ### `SensorReadingTest`（5 テスト）
 
@@ -99,6 +74,81 @@ UseCase のマッピング・合流ロジックを検証する。`FakeSensorData
 | androidConstant が SDK 定数と一致する | コピペミス検出 |
 | label が空でない | 全センサー |
 | unit が空でない | 全センサー |
+
+### `AttitudeMathTest`（12 テスト）
+
+姿勢推定の数学変換関数（`AttitudeMath.kt`）を単体で検証する。Android 依存なし。
+
+| テストケース | 検証内容 |
+|---|---|
+| values が4要素のとき w をそのまま使う | `extractQuaternion` の基本動作 |
+| values が3要素のとき w を再構築する | w 省略デバイスへの対応 |
+| w 再構築は単位クォータニオン条件を満たす | x²+y²+z²+w²=1 の確認 |
+| 単位クォータニオンは単位回転行列を生成する | `quaternionToRotationMatrix` |
+| 回転行列は直交行列である（R × Rᵀ が単位行列） | 数学的な正しさの確認 |
+| 単位回転行列はオイラー角がすべて0 | `rotationMatrixToEulerAngles` |
+| 単位クォータニオンから変換したオイラー角はすべて0 | 変換パイプライン全体 |
+| azimuth の範囲は -π から π | 出力の妥当性チェック |
+| 共役クォータニオンは q ⊗ q⁻¹ が単位クォータニオン | `quaternionConjugate` + `quaternionMultiply` |
+| 同じ姿勢を基準にすると relative は単位クォータニオン | `computeRelativeAttitude` |
+| relative の accuracy と timestampNanos は current から引き継がれる | データの完全性 |
+| relative の回転行列は直交行列である | 相対変換後の数学的正しさ |
+
+> **補足 — なぜ純粋関数として切り出すか**
+> `computeRelativeAttitude` は `SensorManager` を使わず Kotlin の算術演算だけで実装されている。
+> これにより JVM ユニットテストで Android のモックが不要になる。
+> 同様に、UseCase のテストでも `SensorManager` を介さず計算ロジックを直接検証できる。
+
+### `ObserveAttitudeUseCaseTest`（7 テスト）
+
+`ObserveAttitudeUseCaseImpl` のマッピング・変換ロジックを検証する。`FakeAttitudeDataSource` で DataSource をスタブする。
+
+| テストケース | 検証内容 |
+|---|---|
+| センサーが利用不可の場合は available=false を即時 emit して終了する | 利用不可端末の特殊ケース |
+| センサーが利用可能かつ値が来ると available=true で reading が設定される | 正常系マッピング |
+| accuracy と timestampNanos が正しく伝播する | データの完全性 |
+| quaternion が4要素で返る | 出力フォーマットの保護 |
+| rotationMatrix が9要素で返る | 同上 |
+| eulerAngles が3要素で返る | 同上 |
+| 値が更新されると新しい emit が来る | リアルタイム更新 |
+
+### `SensorViewModelTest`（17 テスト）
+
+ViewModel の状態遷移を検証する。`FakeObserveSensorsUseCase` と `FakeObserveAttitudeUseCase` で UseCase をスタブし、
+emit タイミングと `SensorDashboardUiState` の変化が一致することを Turbine で確認する。
+
+`MainDispatcherRule` で `Dispatchers.Main` を `StandardTestDispatcher` に置換することで
+JVM 上で ViewModel を動かせる。スレッド・メモリ関連のテストでは `advanceTimeBy` / `advanceUntilIdle` で仮想時間を制御する。
+
+> **補足 — なぜ `MainDispatcherRule` が必要か**
+> ViewModel の内部処理は `Dispatchers.Main`（Android のメインスレッド用のディスパッチャ）を使う。
+> JVM 単体のテスト環境には Android のメインスレッドが存在しないため、
+> そのまま動かすとクラッシュする。`MainDispatcherRule` は `Dispatchers.Main` を
+> テスト用の偽ディスパッチャ（`StandardTestDispatcher`）に差し替えることで解決する。
+>
+> JUnit4 の `@get:Rule` は「テストの前後に処理を挟む」仕組み。
+> `MainDispatcherRule` は「テスト開始前に差し替え、テスト終了後に元に戻す」を自動で行う。
+
+| テストケース | 検証内容 |
+|---|---|
+| 初期状態は Loading | StateFlow の initialValue |
+| 両 UseCase が emit すると Success に遷移する | worldAttitude が Success に含まれる |
+| センサー UseCase の連続 emit で sensors が最新値に更新される | 2 回目の emit で Success が差し替わる |
+| センサー UseCase がエラーを emit すると Error に遷移する | 例外 → Error |
+| 姿勢 UseCase がエラーを emit すると Error に遷移する | 例外 → Error |
+| 例外メッセージが Error#message に正確に伝播する | exception.message == Error.message |
+| 例外メッセージが null のとき Error#message は Unknown error になる | null 時のフォールバック |
+| 同じ値の連続 emit では StateFlow に新しい item は来ない | StateFlow の dedup 動作 |
+| 購読者がいなくなっても WhileSubscribed 猶予時間内は StateFlow が最後の値を保持する | `advanceTimeBy(4_000)` で検証 |
+| 再購読すると StateFlow の最後の値が即座に届く（Loading には戻らない） | StateFlow の replay 動作 |
+| 基準設定前は relativeAttitude が null | 初期状態 |
+| setReference 後は relativeAttitude が非 null になる | 基準登録 |
+| clearReference 後は relativeAttitude が null に戻る | 基準解除 |
+| setReference 直後の relativeAttitude の quaternion は単位クォータニオン | 自分自身を基準にすると相対回転ゼロ |
+| setReference を Loading 中に呼んでも reference は登録されない | Success 以外では無視される |
+| setReference 後に worldAttitude が更新されると relativeAttitude も再計算される | combine が自動再計算する |
+| clearReference 後に setReference を呼ぶと新しい worldAttitude が基準になる | 再登録で基準が更新される |
 
 ---
 

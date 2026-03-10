@@ -13,6 +13,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.sensorviewer.ui.component.AttitudeCard
 import com.example.sensorviewer.ui.component.SensorCard
 
 /**
@@ -50,6 +52,8 @@ fun SensorDashboardScreen(
         SensorDashboardContent(
             uiState = uiState,
             snackbarHostState = snackbarHostState,
+            onSetReference = viewModel::setReference,
+            onClearReference = viewModel::clearReference,
             modifier = Modifier.padding(innerPadding),
         )
     }
@@ -71,11 +75,13 @@ fun SensorDashboardScreen(
 internal fun SensorDashboardContent(
     uiState: SensorDashboardUiState,
     snackbarHostState: SnackbarHostState,
+    onSetReference: () -> Unit = {},
+    onClearReference: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     when (uiState) {
         is SensorDashboardUiState.Loading -> LoadingContent(modifier)
-        is SensorDashboardUiState.Success -> SensorList(uiState, modifier)
+        is SensorDashboardUiState.Success -> SensorList(uiState, onSetReference, onClearReference, modifier)
         is SensorDashboardUiState.Error -> {
             // LaunchedEffect のキーに message を使うことで、
             // 同じエラーが連続しても再表示されず、新しいメッセージのときだけ Snackbar が出る。
@@ -92,6 +98,8 @@ internal fun SensorDashboardContent(
 @Composable
 private fun SensorList(
     uiState: SensorDashboardUiState.Success,
+    onSetReference: () -> Unit,
+    onClearReference: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -101,10 +109,34 @@ private fun SensorList(
     ) {
         items(
             items = uiState.sensors,
-            // androidConstant は各センサーで一意なので安定したキーとして使える
             key = { it.type.androidConstant },
         ) { sensorState ->
             SensorCard(state = sensorState)
+        }
+
+        item(key = "world_attitude") {
+            AttitudeCard(
+                title = "Attitude (World)",
+                description = "右手系 ENU  East=X  North=Y  Up=Z",
+                state = uiState.worldAttitude,
+                headerActions = {
+                    if (uiState.relativeAttitude == null) {
+                        TextButton(onClick = onSetReference) { Text("Set Ref") }
+                    } else {
+                        TextButton(onClick = onClearReference) { Text("Reset") }
+                    }
+                },
+            )
+        }
+
+        uiState.relativeAttitude?.let { relative ->
+            item(key = "relative_attitude") {
+                AttitudeCard(
+                    title = "Attitude (Custom Reference)",
+                    description = "右手系  基準座標系からの相対回転",
+                    state = relative,
+                )
+            }
         }
     }
 }

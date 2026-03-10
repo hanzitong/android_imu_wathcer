@@ -1,1 +1,0 @@
--keep,allowobfuscation,allowshrinking class com.example.sensorviewer.ui.viewmodel.SensorViewModel

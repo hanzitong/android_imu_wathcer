@@ -2,8 +2,12 @@ package com.example.sensorviewer
 
 import android.content.Context
 import android.hardware.SensorManager
+import com.example.sensorviewer.source.AndroidAttitudeSource
 import com.example.sensorviewer.source.AndroidSensorSource
+import com.example.sensorviewer.source.AttitudeDataSource
 import com.example.sensorviewer.source.SensorDataSource
+import com.example.sensorviewer.usecase.ObserveAttitudeUseCase
+import com.example.sensorviewer.usecase.ObserveAttitudeUseCaseImpl
 import com.example.sensorviewer.usecase.ObserveSensorsUseCase
 import com.example.sensorviewer.usecase.ObserveSensorsUseCaseImpl
 import dagger.Binds
@@ -24,7 +28,15 @@ abstract class AppModule {
 
     @Binds
     @Singleton
+    abstract fun bindAttitudeDataSource(impl: AndroidAttitudeSource): AttitudeDataSource
+
+    @Binds
+    @Singleton
     abstract fun bindObserveSensorsUseCase(impl: ObserveSensorsUseCaseImpl): ObserveSensorsUseCase
+
+    @Binds
+    @Singleton
+    abstract fun bindObserveAttitudeUseCase(impl: ObserveAttitudeUseCaseImpl): ObserveAttitudeUseCase
 
     companion object {
         @Provides

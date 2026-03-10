@@ -143,27 +143,145 @@ Domain 層のクラスが `ui/` パッケージのクラスを参照すると依
 
 ---
 
-## エラーハンドリングを拡張関数 `toUiState()` に切り出す
+## `buildSuccessState` を名前付き関数にする（`combine` の型推論問題を回避）
 
-ViewModel がエラーハンドリングを直接持つと、マッピングロジックと状態管理ロジックが混在して見通しが悪くなる。
-`Flow<List<UiSensorState>>.toUiState()` という拡張関数に切り出すことで：
+姿勢パイプライン追加後、ViewModel は `combine(observeSensors(), observeAttitude(), _reference, ...)` で
+3 本の Flow を合流させる。ラムダで書くと Kotlin の型推論が戻り値を `Success` と確定し、
+直後の `catch { emit(Error(...)) }` が型不一致エラーになる。
 
-- ViewModel は `stateIn` の設定に集中できる
-- エラーマッピングのロジックは独立して読める
+```kotlin
+// NG: combine ラムダの戻り値が Success に確定し、catch の emit<Error> が型エラー
+combine(...) { sensors, attitude, ref ->
+    SensorDashboardUiState.Success(...)  // ← 推論型が Success になる
+}.catch { emit(SensorDashboardUiState.Error(...)) }  // ← Error は Success ではない
 
-> **補足 — Kotlin の拡張関数**
-> 既存のクラスを継承せずにメソッドを追加する Kotlin の機能。
-> `Flow<List<UiSensorState>>.toUiState()` は「Flow に `toUiState()` メソッドを追加する」という意味。
->
-> ```kotlin
-> // 拡張関数の定義
-> private fun Flow<List<UiSensorState>>.toUiState(): Flow<SensorDashboardUiState> =
->     map { SensorDashboardUiState.Success(it) }
->         .catch { emit(SensorDashboardUiState.Error(...)) }
->
-> // 呼び出し側（Flow のメソッドのように呼べる）
-> val uiState = observeSensors().toUiState().stateIn(...)
-> ```
+// OK: 名前付き関数の戻り値型を SensorDashboardUiState と明示
+private fun buildSuccessState(...): SensorDashboardUiState = Success(...)
+
+combine(..., ::buildSuccessState)  // 推論型が SensorDashboardUiState になる
+    .catch { emit(Error(...)) }    // 型が合う
+```
+
+名前付き関数にすることで `::buildSuccessState` という関数参照で渡せ、
+型推論の問題と冗長な `.map<Success, SensorDashboardUiState> { it }` を同時に排除できる。
+
+---
+
+---
+
+## 姿勢パイプラインを既存センサーパイプラインと分離する
+
+`TYPE_ROTATION_VECTOR` を既存の `SensorType` に追加するアプローチも取れるが、以下の理由で別パイプラインにした。
+
+1. **表示形式が根本的に異なる** — 既存の `SensorCard` は「軸ラベル + 単位」の繰り返しで設計されている。
+   姿勢はクォータニオン（4 要素）・回転行列（9 要素）・オイラー角（3 要素）の 3 種類を同時に表示する必要があり、
+   既存の `axes`・`unit` という UI 定数が意味をなさない。
+2. **型安全性** — `SensorType` に `RotationVector` を追加すると「姿勢だけ特別扱い」の条件分岐が各所に生まれる。
+   型で区別することで `when` 式の網羅性チェックも機能し、追加漏れをコンパイラが検出できる。
+3. **パイプラインの独立性** — 姿勢計算（クォータニオン→回転行列→オイラー角）は既存センサーの合流と無関係。
+   分離することで両パイプラインを独立してテスト・変更できる。
+
+---
+
+## `AttitudeMath.kt` の関数を pure Kotlin にする（Android SDK 依存なし）
+
+`SensorManager.getRotationMatrix()` など Android SDK の姿勢計算ユーティリティを使わず、
+純粋な Kotlin 算術演算で実装している。理由は **テスト容易性**。
+
+Android SDK に依存する関数は JVM ユニットテストで動かせない（Robolectric が必要になる）。
+純粋関数にすることで `AttitudeMathTest` が通常の JUnit テストとして PC 上で高速に実行できる。
+
+数学的な実装は `SensorManager` のソースコードと同等の標準的なクォータニオン→回転行列変換であり、
+精度面での妥協はない。
+
+---
+
+## DataSource はデータの橋渡しのみ行い計算を含めない
+
+`AndroidAttitudeSource`（Source 層）は `SensorEvent.values` を `List<Float>` に変換して返すだけで、
+クォータニオン展開・回転行列計算・オイラー角変換は行わない。
+
+理由：
+- Source 層の責務は「Android SDK をコルーチンの世界に橋渡しする」こと
+- 計算ロジックを含めると Source 層が肥大化し、単体テストに Android SDK のモックが必要になる
+- UseCase 層で計算することで `AttitudeMath.kt` の純粋関数が再利用でき、JVM テストで検証できる
+
+> `RawRotationVector` はその薄いラッパー（`values: List<Float>`・`accuracy`・`timestampNanos`）。
+> Android 固有の型（`SensorEvent`）がこの層から外に漏れない。
+
+---
+
+## `Success` に `worldAttitude` と `relativeAttitude` の 2 つの `UiAttitudeState` を持つ
+
+ワールド座標系と基準座標系を同時に表示するため、`SensorDashboardUiState.Success` に 2 フィールドを持たせた。
+
+```kotlin
+data class Success(
+    val sensors: List<UiSensorState>,
+    val worldAttitude: UiAttitudeState = UiAttitudeState(available = false),
+    val relativeAttitude: UiAttitudeState? = null,  // null = 基準未設定
+) : SensorDashboardUiState
+```
+
+`relativeAttitude` が `null` かどうかが「基準設定済みか」の唯一のシグナル。
+別途 `isReferenceActive: Boolean` フラグを持つ必要がなく、`null` チェック一つで UI が分岐できる。
+
+`UiAttitudeState` 自体には変更を加えていない。「基準あり」「基準なし」という概念は
+`UiAttitudeState` の責務ではなく、ViewModel と `Success` の責務。
+
+---
+
+## 基準の状態を ViewModel の `_reference: MutableStateFlow` に持つ
+
+ユーザーが「Set Ref」ボタンを押したときの基準クォータニオンを `MutableStateFlow<AttitudeReading?>` として保持する。
+
+`null` が「基準なし」を表す。`combine` の第 3 引数として渡すことで、
+基準が変わると自動的に `uiState` が再計算される。
+
+```kotlin
+combine(observeSensors(), observeAttitude(), _reference, ::buildSuccessState)
+```
+
+> **別案として検討した `_latestRawAttitude: MutableStateFlow` の追加**
+> `setReference()` のために「最新の姿勢値を別途キャッシュする」実装も考えられたが、
+> `uiState.value`（`StateFlow` は常に最新値を保持する）から直接読める。
+> 冗長なキャッシュを避けることでコードが簡潔になる。
+
+---
+
+## `setReference()` は `uiState.value` から読む
+
+```kotlin
+fun setReference() {
+    _reference.value = (uiState.value as? Success)?.worldAttitude?.reading
+}
+```
+
+`StateFlow` は購読者がいなくても常に最新値を保持するため、
+`setReference()` 呼び出し時に即座に現在の姿勢値を取得できる。
+別途「最新値追跡用の Flow」を用意する必要がない。
+
+---
+
+## `AttitudeCard` に `headerActions` スロットを設ける
+
+`AttitudeCard` はワールド座標系と基準座標系の両方で再利用される。
+ボタン（「Set Ref」「Reset」）の表示ルールはカード固有の知識ではなく、
+`SensorDashboardScreen`（ViewModel のコールバックを持つ側）が決定すべき。
+
+```kotlin
+@Composable
+fun AttitudeCard(
+    title: String,
+    state: UiAttitudeState,
+    headerActions: @Composable RowScope.() -> Unit = {},  // ← 外から挿入
+)
+```
+
+スロットパターンにより：
+- `AttitudeCard` は「姿勢データを表示する」という単一責務を保つ
+- ボタンの有無・ラベル・コールバックは呼び出し元が自由に決められる
+- `AttitudeCard` が `SensorViewModel` を直接参照するような依存を避けられる
 
 ---
 

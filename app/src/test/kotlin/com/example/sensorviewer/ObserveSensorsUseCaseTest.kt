@@ -19,7 +19,7 @@ import org.junit.Test
  * [FakeSensorDataSource] で DataSource をスタブし、以下を検証する:
  * - `available` フラグの合成ロジック（`isAvailable` の結果を反映しているか）
  * - `combine` のセマンティクス（全センサーが初回値を送るまで emit しない）
- * - 出力リストの順序が [com.example.sensorviewer.data.model.SensorType.all] と一致するか
+ * - 出力リストの順序が [com.example.sensorviewer.model.SensorType.all] と一致するか
  * - センサーなし端末の特殊ケース（即時 emit）
  * - SensorReading のデータが欠損なく伝播するか
  */
@@ -165,6 +165,33 @@ class ObserveSensorsUseCaseTest {
             assertEquals(3, state.reading?.accuracy)
             assertEquals(123_456_789L, state.reading?.timestampNanos)
             assertEquals(listOf(1013.25f), state.reading?.values)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `一方のセンサーが更新されると他センサーの最新値も同じ emit に含まれる`() = runTest {
+        // combine は「どれか 1 本が更新されたとき、全員の最新値を合わせて emit する」。
+        // Gyroscope の値は更新していないが、Accelerometer 更新の emit に含まれ続ける。
+        fakeDataSource.setAvailable(SensorType.Accelerometer, SensorType.Gyroscope)
+
+        val accel1 = SensorReading(SensorType.Accelerometer, listOf(1f, 0f, 0f), 3, 0L)
+        val gyro   = SensorReading(SensorType.Gyroscope,     listOf(0f, 1f, 0f), 3, 0L)
+        val accel2 = SensorReading(SensorType.Accelerometer, listOf(2f, 0f, 0f), 3, 1_000L)
+
+        useCase().test {
+            fakeDataSource.emit(SensorType.Accelerometer, accel1)
+            fakeDataSource.emit(SensorType.Gyroscope, gyro)
+            awaitItem() // 初回 emit（accel1 + gyro が揃う）
+
+            // Accelerometer だけ更新する
+            fakeDataSource.emit(SensorType.Accelerometer, accel2)
+            val second = awaitItem()
+
+            // Accelerometer は accel2 に更新されている
+            assertEquals(accel2, second.first { it.type == SensorType.Accelerometer }.reading)
+            // Gyroscope は更新していないが、前回の値が引き続き保持されている
+            assertEquals(gyro, second.first { it.type == SensorType.Gyroscope }.reading)
             cancelAndIgnoreRemainingEvents()
         }
     }

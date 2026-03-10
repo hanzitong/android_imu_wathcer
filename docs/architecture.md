@@ -12,28 +12,35 @@ Android Sensor Viewer はスマートフォンの IMU・環境センサーをリ
 
 ## 層構成
 
+アプリは **センサーパイプライン** と **姿勢パイプライン** の 2 本を並行して持つ。
+
 ```
-┌─────────────────────────────────────────────────┐
-│  UI Layer                                        │
-│  SensorDashboardScreen / SensorCard / ...        │
-├─────────────────────────────────────────────────┤
-│  ViewModel Layer                                 │
-│  SensorViewModel → SensorDashboardUiState        │
-├─────────────────────────────────────────────────┤
-│  Domain Layer                                    │
-│  ObserveSensorsUseCase (interface)               │
-│  ObserveSensorsUseCaseImpl                       │
-├─────────────────────────────────────────────────┤
-│  Source Layer                                    │
-│  SensorDataSource (interface)                    │
-│  AndroidSensorSource                             │
-├─────────────────────────────────────────────────┤
-│  Android SDK                                     │
-│  SensorManager / SensorEventListener             │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  UI Layer                                                            │
+│  SensorDashboardScreen / SensorCard / AttitudeCard / ...             │
+├─────────────────────────────────────────────────────────────────────┤
+│  ViewModel Layer                                                     │
+│  SensorViewModel → SensorDashboardUiState                            │
+│  （基準座標系の状態 _reference も保持）                                │
+├──────────────────────────────┬──────────────────────────────────────┤
+│  Domain Layer（センサー）     │  Domain Layer（姿勢）                 │
+│  ObserveSensorsUseCase       │  ObserveAttitudeUseCase               │
+│  ObserveSensorsUseCaseImpl   │  ObserveAttitudeUseCaseImpl           │
+│                              │  AttitudeMath（純粋関数群）            │
+├──────────────────────────────┼──────────────────────────────────────┤
+│  Source Layer（センサー）     │  Source Layer（姿勢）                 │
+│  SensorDataSource            │  AttitudeDataSource                   │
+│  AndroidSensorSource         │  AndroidAttitudeSource                │
+├──────────────────────────────┴──────────────────────────────────────┤
+│  Android SDK                                                         │
+│  SensorManager / SensorEventListener                                 │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 各層は直下の層にのみ依存する。Android SDK への依存は Source 層に封じ込められている。
+
+スレッドの観点では、Source 層がセンサースレッドとメインスレッドの境界になる。
+詳しくは [threading.md](threading.md) を参照。
 
 > **補足 — 「層に分ける」とは**
 > 上の層は下の層を呼び出せるが、逆（下から上）は禁止する設計。
