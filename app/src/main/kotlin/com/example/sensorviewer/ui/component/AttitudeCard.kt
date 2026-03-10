@@ -152,7 +152,7 @@ private fun EulerAnglesSection(reading: AttitudeReading?) {
  *
  * レイアウト:
  * ```
- * Roll    0.123 rad  (7.05°)
+ * Roll    0.123 [rad]  7.05 [°]
  * ```
  */
 @Composable
@@ -172,14 +172,18 @@ private fun EulerAngleRow(axisLabel: String, radians: Float?) {
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
         )
         Text(
-            text = " rad",
+            text = " [rad]",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = radians?.let { "(%.2f°)".format(it.toDegrees()) } ?: "",
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            text = radians?.let { "%.2f".format(it.toDegrees()) } ?: "---",
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+        )
+        Text(
+            text = " [°]",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
